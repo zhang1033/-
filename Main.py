@@ -11,6 +11,7 @@ import traceback as tb
 import threading as thd
 import os,sys,json,time,gc
 import main_strings as mainstr
+import tkinter_external as tkex
 import platform as plfm
 LOCAL_MESSAGE={}
 view_redundant_window=[]
@@ -18,7 +19,9 @@ pre_window_errors={}
 no_value=object()
 self_settings_default={"is_rollcall_once":False,"apply_config_noerror":False,"window_topmost":False,"delay_rollcall":False,"delay_rollcall_time_ms":2000}
 self_settings=dict(self_settings_default)
-def configs_access(item,value=no_value,action="load"):
+def args_kw_data(*args,**kw):
+    return(args,kw)
+def configs_access(item,value=no_value,action="load",widget=None):
     global self_settings,self_settings_default
     def access_action():
         nonlocal item,value,action
@@ -39,9 +42,9 @@ def configs_access(item,value=no_value,action="load"):
                         else:
                             pass
                     except PermissionError as e:
-                        msg.showerror("随机抽取-写入json配置失败", f"未能写入配置,但配置已经生效，原因：\n{str(e)}")
+                        pre_window_error_show(f"未能写入配置,但配置已经生效，原因：\n{str(e)}","随机抽取-写入json配置失败", 0x10,parent=main.nametowidget(widget).winfo_toplevel())
                     except Exception as e:
-                        msg.showerror("随机抽取-写入json配置失败", f"写入配置时出现未预料的错误，但配置已经生效，原因：\n{str(tb.format_exc())}")
+                        pre_window_error_show(f"写入配置时出现未预料的错误，但配置已经生效，原因：\n{str(tb.format_exc())}","随机抽取-写入json配置失败",0x10,parent=main.nametowidget(widget).winfo_toplevel())
             else:
                 raise ValueError("没有值")
         else:
@@ -54,93 +57,49 @@ def configs_access(item,value=no_value,action="load"):
             return(access_action())
         else:
             raise KeyError(f"没有设置项-\"{item}\"")
-def pre_window_error_show(text,title,types,action=None,args=()):
+def tcl_configs_change_func(widget,arg_data):
+    arg_data=eval(arg_data)
+    if type(arg_data).__name__ in ("tuple","list"):
+        __arg_data_length=len(arg_data)
+        if __arg_data_length>=2:
+            __arg_data_values=tuple(arg_data[1:__arg_data_length:1])
+            if len(__arg_data_values)==1:
+                __arg_data_values=__arg_data_values[0]
+            configs_access(arg_data[0],value=__arg_data_values,action="change",widget=widget)
+        else:
+            raise AttributeError("参数长度不够")
+    else:
+        raise TypeError("非元组或列表类型")
+def pre_window_error_show(text,title,types,parent=None,action=None):
     global pre_window_errors
-    pre_window_errors[title]=[text,types,action]
+    pre_window_errors[title]=[text,types,parent,action]
 def show_pre_window_error():
     global pre_window_errors
-    for error in pre_window_errors:
-        return_code=c.windll.user32.MessageBoxW(main.winfo_id(),pre_window_errors[error][0],error,pre_window_errors[error][1])
-        if pre_window_errors[error][2]!=None:
-            if str(return_code) in list(pre_window_errors[error][2].keys()):
-                pre_window_errors[error][2][str(return_code)][0](*pre_window_errors[error][2][str(return_code)][1])
-    pre_window_errors={}
-def load_settings(encoding=None):
-    global self_settings
-    def write_default_config():
-        try:
-            with open("./config.json","w",encoding="utf-8") as config_write:
-                json.dump(self_settings,config_write, ensure_ascii=False)
-        except PermissionError as e:
-            pre_window_error_show(f"未能写入默认配置，原因：\n{str(e)}","随机抽取-写入json配置失败",0x10)
-        except Exception as e:
-            pre_window_error_show(f"写入默认配置时出现未预料的错误，原因：\n{str(tb.format_exc())}","随机抽取-写入json配置失败",0x10)
-    if os.path.isfile("./config.json"):
-        try:
-            bom=None#预留变量，并设置为空
-            #自动检测编码
-            if encoding==None:
-                with open("./config.json","rb") as encodes:#用二进制形式打开文件，用with语句是为了能够完全打开或关闭文件
-                    bom=encodes.read(3)#读配置文件的前三个字节
-                if bom==b"\xef\xbb\xbf":#判断文件前3个字节是否有utf-8-bom的特征
-                    encoding="utf-8-sig"#使用utf-8-bom编码
+    def process():
+        global pre_window_errors
+        for error in dict(pre_window_errors):
+            if pre_window_errors[error][2] != None:
+                wid=pre_window_errors[error][2].winfo_id()
+            else:
+                wid=None
+            return_code=c.windll.user32.MessageBoxW(wid,pre_window_errors[error][0],error,pre_window_errors[error][1])
+            if pre_window_errors[error][3]!=None:
+                if str(return_code) in list(pre_window_errors[error][3].keys()):
+                    pre_window_errors[error][3][str(return_code)]()
                 else:
-                    encoding="utf-8"#使用utf-8编码
-            with open("./config.json","r",encoding=encoding) as r:
-                self_settings=json.loads(r.read())
-        #except ValueError as json_error:#检查json语法是否正确（Python3.4兼容）
-        #    pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10)
-        except json.decoder.JSONDecodeError as json_error:#检查json语法是否正确
-            pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10)
-        except FileNotFoundError as json_error:#检查文件存在性（基本被上面的if-else代码优先执行）
-            pre_window_error_show("找不到json文件\"config.json\"，已自动创建并使用默认配置，原因：\n"+str(json_error),"随机抽取-找不到json配置",0x30)
-            write_default_config()
-        except PermissionError as json_error:#检查是否被拒绝访问
-            pre_window_error_show("json文件\"config.json\"被拒绝读取，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置读取失败",0x10)
-        except Exception as json_error:#检测其它异常来输出详细信息
-            pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10)
-    else:
-        if os.path.isdir("./namelist.json")==True:#检测配置是否为文件夹
-            pre_window_error_show("json配置为目录，请在当前目录下的\"config.json\"文件夹删除，然后再创建此文件。\n目前已使用默认配置。","随机抽取-找不到json配置",0x10)
+                    if "other" in pre_window_errors[error][3]:
+                        pre_window_errors[error][3]["other"]()
+            del pre_window_errors[error]
+        if len(pre_window_errors)!=0:
+            process()
+    while True:
+        #print("clock")
+        if Process_Local_Message("WM_QUIT","GLOBAL","exist"):
+            break
         else:
-            pre_window_error_show("未找到json配置，已自动创建\"config.json\"文件。\n目前已使用默认配置。","随机抽取-找不到json配置",0x30)
-            write_default_config()
-thd.Thread(target=load_settings).start()
-class Win32_MessageboxW_Base:
-    def __init__(self,Owner,Message_Text,Message_Title,Message_Type,return_func):
-        def MessageBox_Window():
-            self.MessageBox_return_value(
-                c.windll.user32.MessageBoxW(
-                    Owner.winfo_id(),
-                    Message_Text,
-                    Message_Title,
-                    Message_Type
-                    )
-                )
-            return_func()
-        Win32_MessageBox=thd.Thread(target=MessageBox_Window)
-        Win32_MessageBox.start()
-    MessageBox_return=None
-    def MessageBox_return_value(self,Value):
-        self.MessageBox_return=Value
-def Process_Local_Message(Message_Class,Message_String,action):
-    global LOCAL_MESSAGE
-    if action=="boardcast":
-        if Message_Class not in LOCAL_MESSAGE:
-            LOCAL_MESSAGE[Message_Class]=[]
-        if not Message_String in LOCAL_MESSAGE[Message_Class]:
-            LOCAL_MESSAGE[Message_Class].append(Message_String)
-    elif action=="remove":
-        if (Message_Class in LOCAL_MESSAGE) and (Message_String in LOCAL_MESSAGE[Message_Class]):
-            del LOCAL_MESSAGE[Message_Class][LOCAL_MESSAGE[Message_Class].index(Message_String)]
-    elif action=="exist":
-        if Message_Class not in LOCAL_MESSAGE:
-            return False
-        else:
-            return(Message_String in LOCAL_MESSAGE[Message_Class])
-def Process_Threading(Threading_Name,State):
-    if State in [True,False]:
-        THREADING_PROCESS_LIST[Threading_Name]=State
+            if len(pre_window_errors)!=0:
+                process()
+            time.sleep(0.01)
 def program_exit():
     Process_Local_Message("WM_QUIT","GLOBAL","boardcast")
     main.destroy()
@@ -170,6 +129,68 @@ main.title("随机抽取")#标题
 main.config(bg="#90f4b3")#设置背景颜色
 main.attributes("-alpha",0.8)#设置窗口透明度
 main.protocol("WM_DELETE_WINDOW",program_exit)
+tcl_configs_access=main.register(tcl_configs_change_func)
+main.call("bind","all","<<Configs_Change>>",f"{tcl_configs_access} %W %d")
+
+def load_settings(encoding=None):
+    global self_settings
+    def write_default_config():
+        try:
+            with open("./config.json","w",encoding="utf-8") as config_write:
+                json.dump(self_settings,config_write, ensure_ascii=False)
+        except PermissionError as e:
+            pre_window_error_show(f"未能写入默认配置，原因：\n{str(e)}","随机抽取-写入json配置失败",0x10,parent=main)
+        except Exception as e:
+            pre_window_error_show(f"写入默认配置时出现未预料的错误，原因：\n{str(tb.format_exc())}","随机抽取-写入json配置失败",0x10,parent=main)
+    if os.path.isfile("./config.json"):
+        try:
+            bom=None#预留变量，并设置为空
+            #自动检测编码
+            if encoding==None:
+                with open("./config.json","rb") as encodes:#用二进制形式打开文件，用with语句是为了能够完全打开或关闭文件
+                    bom=encodes.read(3)#读配置文件的前三个字节
+                if bom==b"\xef\xbb\xbf":#判断文件前3个字节是否有utf-8-bom的特征
+                    encoding="utf-8-sig"#使用utf-8-bom编码
+                else:
+                    encoding="utf-8"#使用utf-8编码
+            with open("./config.json","r",encoding=encoding) as r:
+                self_settings=json.loads(r.read())
+        #except ValueError as json_error:#检查json语法是否正确（Python3.4兼容）
+        #    pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10)
+        except json.decoder.JSONDecodeError as json_error:#检查json语法是否正确
+            pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10,parent=main)
+        except FileNotFoundError as json_error:#检查文件存在性（基本被上面的if-else代码优先执行）
+            pre_window_error_show("找不到json文件\"config.json\"，已自动创建并使用默认配置，原因：\n"+str(json_error),"随机抽取-找不到json配置",0x30,parent=main)
+            write_default_config()
+        except PermissionError as json_error:#检查是否被拒绝访问
+            pre_window_error_show("json文件\"config.json\"被拒绝读取，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置读取失败",0x10,parent=main)
+        except Exception as json_error:#检测其它异常来输出详细信息
+            pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10,parent=main)
+    else:
+        if os.path.isdir("./namelist.json")==True:#检测配置是否为文件夹
+            pre_window_error_show("json配置为目录，请在当前目录下的\"config.json\"文件夹删除，然后再创建此文件。\n目前已使用默认配置。","随机抽取-找不到json配置",0x10,parent=main)
+        else:
+            pre_window_error_show("未找到json配置，已自动创建\"config.json\"文件。\n目前已使用默认配置。","随机抽取-找不到json配置",0x30,parent=main)
+            write_default_config()
+load_settings()
+def Process_Local_Message(Message_Class,Message_String,action):
+    global LOCAL_MESSAGE
+    if action=="boardcast":
+        if Message_Class not in LOCAL_MESSAGE:
+            LOCAL_MESSAGE[Message_Class]=[]
+        if not Message_String in LOCAL_MESSAGE[Message_Class]:
+            LOCAL_MESSAGE[Message_Class].append(Message_String)
+    elif action=="remove":
+        if (Message_Class in LOCAL_MESSAGE) and (Message_String in LOCAL_MESSAGE[Message_Class]):
+            del LOCAL_MESSAGE[Message_Class][LOCAL_MESSAGE[Message_Class].index(Message_String)]
+    elif action=="exist":
+        if Message_Class not in LOCAL_MESSAGE:
+            return False
+        else:
+            return(Message_String in LOCAL_MESSAGE[Message_Class])
+def ttk_style(widget,*args,**kw):
+    ttk.Style().configure(f"{widget}.{widget.winfo_class()}",*args,**kw)
+    return(f"{widget}.{widget.winfo_class()}")
 ##touch=c.windll.user32.RegisterTouchWindow(main.winfo_id(),1)
 ##class MSG(c.Structure):
 ##    _fields_=[
@@ -215,21 +236,18 @@ def name_rand(name_rand_times=0):
                 if len(namelist_local)==0:
                     def finish_rollcall_once():
                         global rollcall_once_namelist
-                        if rollcall_once_MB.MessageBox_return == 6:
-                            rollcall_once_namelist=list(name_database)
-                            del rollcall_once_namelist[rollcall_once_namelist.index(name_local)]
-                            start.config(state="normal")
-                        else:
-                            start.config(state="disable")
-                    rollcall_once_MB=Win32_MessageboxW_Base(main,
-                                                """名单内的名字已抽完。
+                        rollcall_once_namelist=list(name_database)
+                        del rollcall_once_namelist[rollcall_once_namelist.index(name_local)]
+                        start.config(state="normal")
+                    pre_window_error_show("""名单内的名字已抽完。
 是否进行重新抽取？
 
 是-重新进行
 否-取消""",
                                                 "随机抽取",
                                                 0x44,
-                                                finish_rollcall_once
+                                          parent=main,
+                                                action={"6":lambda:finish_rollcall_once(),"other":lambda:start.config(state="disable")}
                                                 )
                 else:
                     if configs_access("delay_rollcall"):
@@ -266,7 +284,7 @@ menu.place(x=0,y=0,height=35*dpi,width=main.winfo_width())
     
 #调整窗口大小的控件
 resize_tool=ttk.Sizegrip(main)
-style=ttk.Style().configure("TSizegrip",background="#90f4b3")#改变控件主底色
+resize_tool.config(style=ttk_style(resize_tool,background="#90f4b3"))#改变控件主底色
 resize_tool.place(x=main.winfo_width(),y=main.winfo_height(),anchor="se")
 def menu_size(event):
     menu.place(width=main.winfo_width())
@@ -390,25 +408,25 @@ def hide_title():
 main_window_finish_time=time.perf_counter()
 def topmost_window():
     main.attributes("-topmost",window_topmost.get())
-    configs_access("window_topmost",value=window_topmost.get(),action="change")
+    main.event_generate("<<Configs_Change>>",data=("window_topmost",window_topmost.get()))
+    #configs_access("window_topmost",value=window_topmost.get(),action="change")
 #不重复抽取的名单检测
 def rollcall_once_cmd():
     global rollcall_once_namelist
     rollcall_once.set(not(rollcall_once.get()))
     if len(name_database)<=3 and rollcall_once.get()==False:
         def continue_to_rollcall_once():
-            global rollcall_once_namelist
-            if enable_rollcall_once.MessageBox_return == 6:
-                if len(name_database)<=1:
-                    rollcall_once.set(False)
-                    configs_access("is_rollcall_once",value=False,action="change")
-                else:
-                    rollcall_once.set(True)
-                    configs_access("is_rollcall_once",value=True,action="change")
-            if rollcall_once_namelist==[]:
-                rollcall_once_namelist=list(name_database)
-        enable_rollcall_once=Win32_MessageboxW_Base(
-            main,
+            if len(name_database)<=1:
+                rollcall_once.set(False)
+                main.event_generate("<<Configs_Change>>",data=("is_rollcall_once",False))
+                #configs_access("is_rollcall_once",value=False,action="change")
+            else:
+                rollcall_once.set(True)
+                main.event_generate("<<Configs_Change>>",data=("is_rollcall_once",True))
+                #configs_access("is_rollcall_once",value=True,action="change")
+        if rollcall_once_namelist==[]:
+            rollcall_once_namelist=list(name_database)
+        pre_window_error_show(
             """    检测到名单元素低于4个，在不重复抽选下不会达到预期效果。如果此时再进行抽取，会有大问题。
     所以如果在1个以上，虽然能正常进行，但就跟顺序抽没什么区别。
     如果元素数量少于2个，会出现BUG，所以无论选任何选项都无效。
@@ -416,19 +434,23 @@ def rollcall_once_cmd():
 是否继续？""",
             "随机抽取-不重复抽取",
             0x34,
-            continue_to_rollcall_once
+            parent=main,
+            action={"6":lambda:continue_to_rollcall_once()}
             )
     else:
         rollcall_once.set(not(rollcall_once.get()))
-        configs_access("is_rollcall_once",value=rollcall_once.get(),action="change")
+        main.event_generate("<<Configs_Change>>",data=("is_rollcall_once",rollcall_once.get()))
+        #configs_access("is_rollcall_once",value=rollcall_once.get(),action="change")
         if rollcall_once_namelist==[]:
             rollcall_once_namelist=list(name_database)
 def apply_config_noerror_cmd():
-    configs_access("apply_config_noerror",value=apply_config_noerror.get(),action="change")
+    main.event_generate("<<Configs_Change>>",data=("apply_config_noerror",apply_config_noerror.get()))
+    #configs_access("apply_config_noerror",value=apply_config_noerror.get(),action="change")
 delay_rollcall=tk.BooleanVar()
 delay_rollcall.set(configs_access("delay_rollcall"))
 def delay_rollcall_cmd():
-    configs_access("delay_rollcall",value=delay_rollcall.get(),action="change")
+    main.event_generate("<<Configs_Change>>",data=("delay_rollcall",delay_rollcall.get()))
+    #configs_access("delay_rollcall",value=delay_rollcall.get(),action="change")
 #关于我的弹出子窗口
 about_me_window=None
 def about_me(exist=None):
@@ -438,54 +460,38 @@ def about_me(exist=None):
             window=tk.Toplevel(bg="#000000")
             window.title("关于我")
             window.minsize(int(340*dpi),int(300*dpi))
-            window.iconbitmap(bitmap=cwd_path)
             window.resizable(False,False)
             def close_window():
-                about_me_canvas.unbind("<ButtonPress-1>")
-                about_me_canvas.unbind("<B1-Motion>")
                 window.destroy()
             window.protocol("WM_DELETE_WINDOW",close_window)
-            about_me_canvas=tk.Canvas(window,bg="#49a198")
+            about_me_canvas=tk.Canvas(window,bg="#D5F7F0")
             about_me_canvas.pack(fill="both",expand=True)
             about_me_canvas_scroll=tk.Scrollbar(about_me_canvas,command=about_me_canvas.yview)
             about_me_canvas_scroll.pack(side="right",fill="y")
-            about_me_canvas.yview_scroll(10,"units")
             about_me_canvas.update()
-            about_me_frame=tk.Frame(about_me_canvas,bg="#D5F7F0")
-            about_me_frame_id=about_me_canvas.create_window((0,0),window=about_me_frame,anchor="nw",width=window.winfo_width()-int(about_me_canvas_scroll.cget("width")),height=about_me_canvas.winfo_height())
             about_me_buttons=tk.Frame(window,bg="#7BB3AA")
             about_me_buttons.pack(fill="x",ipady=25*dpi,side="bottom")
             about_me_button_ok=ttk.Button(about_me_buttons,text="确定",command=close_window)
-            ttk.Style().configure("TButton",background="#7BB3AA")
-            about_me_frame.update()
-            about_me_button_ok.place(x=about_me_frame.winfo_width(),anchor="ne")
+            about_me_button_ok.config(style=ttk_style(about_me_button_ok,background="#7BB3AA"))
+            about_me_button_ok.place(x=about_me_canvas.winfo_width()-10*dpi,anchor="ne")
             about_me_button_ok.update()
+            about_me_button_ok.focus_set()
             about_me_button_ok.place(y=(50*dpi-about_me_button_ok.winfo_height())/2)
+            about_me_canvas.create_polygon((0,0),fill="#D5F7F0")
             about_me=[
-                (tk.Label(about_me_frame,text=mainstr.About_strings.about_me_leader()[0],font=("楷体",18,"bold"),fg="#0E5F61",bg="#D5F7F0"),
-                 5,10,"nw"),
-                (tk.Label(about_me_frame,text=mainstr.About_strings.about_me_leader()[1],font=("楷体",16),fg="#0E5F61",bg="#D5F7F0"),
-                 window.winfo_width()-int(about_me_canvas_scroll.cget("width")),10,"ne"),
-                (tk.Label(about_me_frame,text=mainstr.About_strings.about_me(),font=("仿宋",12),wraplength=window.winfo_width()-int(about_me_canvas_scroll.cget("width"))-5*dpi,justify="left",fg="#183C4D",bg="#D5F7F0"),
-                 5,0,"nw"
-                 )
+                (args_kw_data(anchor="nw",text=mainstr.About_strings.about_me_leader()[0],font=("楷体",18,"bold"),fill="#0E5F61"),
+                 5*dpi,20*dpi),
+                (args_kw_data(anchor="ne",text=mainstr.About_strings.about_me_leader()[1],font=("楷体",16),fill="#0E5F61"),
+                 window.winfo_width()-int(about_me_canvas_scroll.cget("width"))-5*dpi,20*dpi),
+                (args_kw_data(anchor="nw",text=mainstr.About_strings.about_me(),font=("仿宋",12),width=window.winfo_width()-int(about_me_canvas_scroll.cget("width"))-5*dpi,justify="left",fill="#183C4D"),
+                 5*dpi,20*dpi)
                       ]
-            tar_height=about_me[0][2]*dpi
             for widget in about_me:
-                widget[0].place(x=widget[1]*dpi,y=tar_height,anchor=widget[3])
-                widget[0].update()
-                tar_height+=widget[2]*dpi+widget[0].winfo_height()
-            #tar_height=about_me[-1][2]+about_me[-1][0].winfo_height()+20*dpi
-            if tar_height>about_me_canvas.winfo_height():
-                about_me_canvas.itemconfig(about_me_frame_id,height=tar_height)
-            else:
-                #print(test_v)
-                about_me_canvas.itemconfig(about_me_frame_id,height=about_me_canvas.winfo_height())
-            about_me[1][0].place(x=window.winfo_width()-int(about_me_canvas_scroll.cget("width"))-int(about_me[1][0].cget("width"))-5*dpi)
+                about_me_canvas.create_text((widget[1],about_me_canvas.bbox("all")[3]+widget[2]),*widget[0][0],**widget[0][1])
             about_me_canvas.config(yscrollcommand=about_me_canvas_scroll.set,scrollregion=about_me_canvas.bbox("all"))
             def mouse_wheel(event):
                 if str(event.widget.winfo_toplevel())==str(window) and (str(event.widget).split(".")[2]==str(about_me_canvas).split(".")[2]):
-                    about_me_canvas.yview_scroll(-int(event.delta/15),"units")
+                    about_me_canvas.yview_scroll(-int(event.delta/60),"units")
             about_me_canvas.bind_all("<MouseWheel>",mouse_wheel)
             return(window)
         if exist==None:
@@ -506,7 +512,6 @@ def about_program(exist=None):
             window=tk.Toplevel(bg="#000000")
             window.minsize(int(700*dpi),int(500*dpi))
             window.title("关于此程序")
-            window.iconbitmap(bitmap=cwd_path)
             window.resizable(False,False)
             def close_window():
                 about_program_canvas.unbind("<ButtonPress-1>")
@@ -518,35 +523,27 @@ def about_program(exist=None):
             about_program_buttons.update()
             about_program_colnums=tk.Frame(window,bg="#00594B")
             about_program_colnums.pack(fill="y",side="left",ipadx=100*dpi)
-            about_program_canvas=tk.Canvas(window,bg="#49a198")
+            about_program_canvas=tk.Canvas(window,bg="#D5F7F0")
             about_program_canvas.pack(fill="both",expand=True)
             about_program_canvas_scroll=tk.Scrollbar(about_program_canvas,command=about_program_canvas.yview)
             about_program_canvas_scroll.pack(side="right",fill="y")
-            about_program_canvas.yview_scroll(10,"units")
             about_program_canvas.update()
-            #about_program_frame=tk.Frame(about_program_canvas,bg="#D5F7F0")
-            #about_program_frame_id=about_program_canvas.create_window((0,0),window=about_program_frame,anchor="nw",width=about_program_canvas.winfo_width()-int(about_program_canvas_scroll.cget("width")),height=about_program_canvas.winfo_height())
-            #about_program_frame.update()
             about_program_button_ok=ttk.Button(about_program_buttons,text="确定",command=close_window)
-            ttk.Style().configure("TButton",background="#7BB3AA")
+            about_program_button_ok.config(style=ttk_style(about_program_button_ok,background="#7BB3AA"))
             about_program_button_ok.place(x=about_program_buttons.winfo_width()-10*dpi,anchor="ne")
             about_program_button_ok.update()
             about_program_button_ok.place(y=(50*dpi-about_program_button_ok.winfo_height())/2)
             wrpleng=about_program_canvas.winfo_width()-int(about_program_canvas_scroll.cget("width"))-10*dpi
+            about_program_canvas.create_polygon((0,0),fill="#D5F7F0")
             about_program=[
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.program_new(),font=("楷体",12),fg="#0E5F61",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,0,"nw"),
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.about_program(),font=("仿宋",12),fg="#0E5F61",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,10*dpi,"nw"),
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.no_using_electron(),font=("仿宋",12),fg="#020E47",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,0,"nw"),
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.my_truth_opinion(),font=("仿宋",12),fg="#472722",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,0,"nw"),
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.about_program_handout(),font=("仿宋",12),fg="#0E5F61",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,0,"nw"),
-                (tk.Label(about_program_canvas,text=mainstr.About_strings.tested_list(),font=("仿宋",12),fg="#0A334A",bg="#D5F7F0",wraplength=wrpleng,justify="left"),
-                 5*dpi,20*dpi,"nw")
+                args_kw_data((5*dpi,0),anchor="nw",text=mainstr.About_strings.program_new(),font=("楷体",12),fill="#0E5F61",width=wrpleng,justify="left"),
+                args_kw_data((5*dpi,10*dpi),anchor="nw",text=mainstr.About_strings.about_program(),font=("仿宋",12),fill="#0E5F61",width=wrpleng,justify="left"),
+                args_kw_data((5*dpi,0),anchor="nw",text=mainstr.About_strings.no_using_electron(),font=("仿宋",12),fill="#020E47",width=wrpleng,justify="left"),
+                args_kw_data((5*dpi,0),anchor="nw",text=mainstr.About_strings.my_truth_opinion(),font=("仿宋",12),fill="#472722",width=wrpleng,justify="left"),
+                args_kw_data((5*dpi,0),anchor="nw",text=mainstr.About_strings.about_program_handout(),font=("仿宋",12),fill="#0E5F61",width=wrpleng,justify="left"),
+                args_kw_data((5*dpi,20*dpi),anchor="nw",text=mainstr.About_strings.tested_list(),font=("仿宋",12),fill="#0A334A",width=wrpleng,justify="left")
                       ]
+            about_program_ids=[]
             about_program_colnum=[]
             about_program_colnum_title=tk.Label(about_program_colnums,text=list(mainstr.About_strings.labels_page().keys())[0],bg="#00594B",fg="#D5F7F0",font=("楷体",25,"bold"))
             about_program_colnum_title.place(x=10*dpi,y=12*dpi,anchor="nw")
@@ -563,39 +560,23 @@ def about_program(exist=None):
                 about_program_colnum[-1][0].bind("<Button-1>",change_page)
             about_program_colnum[0][0].config(font=("仿宋",14,"bold","underline"))
             widget_total_y=10*dpi
-            pre_ids={}
-            #tar_height=about_program[-1][2]+about_program[-1][0].winfo_reqheight()
             def place_text(is_place=False,skipped_index=[],change_page=False):
-                nonlocal widget_total_y,pre_ids
-                for about_program_text_ids in list(pre_ids.values()):
-                    about_program_canvas.delete(about_program_text_ids)
-                pre_ids={}
+                nonlocal about_program_ids
+                about_program_canvas.delete(*about_program_ids)
                 for widget in about_program:
                     if is_place:
                         if about_program.index(widget) in skipped_index:
-                            about_program_text_id=about_program_canvas.create_window((widget[1],widget_total_y+widget[2]),window=widget[0],anchor=widget[3],width=about_program_canvas.winfo_width()-int(about_program_canvas_scroll.cget("width"))-widget[1],height=widget[0].winfo_reqheight())
-                            pre_ids[str(widget[0])]=about_program_text_id
-                            widget_total_y+=(widget[0].winfo_reqheight()+widget[2])
-                    else:
-                        widget_total_y+=(widget[0].winfo_reqheight()+widget[2])
-                if not is_place:
-                    return widget_total_y
-                else:
-                    about_program_canvas.config(scrollregion=about_program_canvas.bbox("all"))
-                    widget_total_y=10*dpi
-            #print(test_v)
-            if place_text()>about_program_canvas.winfo_height():
-                #about_program_canvas.itemconfig(about_program_frame_id,height=widget_total_y)
-                widget_total_y=10*dpi
-            else:
-                #about_program_canvas.itemconfig(about_program_frame_id,height=about_program_canvas.winfo_height())
-                pass
+                            places=about_program_canvas.bbox("all")[3]+widget[0][0][1]
+                            about_program_ids.append(about_program_canvas.create_text((widget[0][0][0],places),**widget[1]))
+                print(places)
+                if about_program_canvas.bbox("all")[3]<about_program_canvas.winfo_height():
+                    about_program_ids.append(about_program_canvas.create_polygon((0,about_program_canvas.bbox("all")[3],about_program_canvas.winfo_width(),about_program_canvas.bbox("all")[3],about_program_canvas.winfo_width(),about_program_canvas.winfo_height()-6,0,about_program_canvas.winfo_height()-6),fill="#D5F7F0"))
+                about_program_canvas.config(scrollregion=about_program_canvas.bbox("all"))
             place_text(is_place=True,skipped_index=range(0,7,1))
-            #about_program_frame.update_idletasks()
             about_program_canvas.config(yscrollcommand=about_program_canvas_scroll.set,scrollregion=about_program_canvas.bbox("all"))
             def mouse_wheel(event):
                 if str(event.widget.winfo_toplevel())==str(window) and (str(event.widget).split(".")[2]==str(about_program_canvas).split(".")[2]):
-                    about_program_canvas.yview_scroll(-int(event.delta/15),"units")
+                    about_program_canvas.yview_scroll(-int(event.delta/60),"units")
             about_program_canvas.bind_all("<MouseWheel>",mouse_wheel)
             return(window)
         if exist==None:
@@ -614,31 +595,30 @@ def delay_rollcall_set(exist=None):
         def create():
             window=tk.Toplevel(bg="#B6EEFF")
             window.minsize(int(300*dpi),int(200*dpi))
-            window.title("设置延迟点名时间-随机抽取（草稿）")
-            window.iconbitmap(bitmap=cwd_path)
+            window.title("设置延迟点名时间-随机抽取")
             window.resizable(False,False)
             window.transient(main)
             window.grab_set()
-            delay_rollcall_label=tk.Label(window,text="输入延迟点名时间（单位：毫秒）",bg="#B6EEFF",fg="#06212B",font=("仿宋",14),justify="left")
-            delay_rollcall_label.pack(ipady=10*dpi,ipadx=5*dpi)
-            delay_rollcall_time=tk.StringVar()
+            delay_rollcall_label=tk.Label(window,text="输入延迟点名时间",bg="#B6EEFF",fg="#06212B",font=("仿宋",18),justify="left")
+            delay_rollcall_label.pack(ipady=5*dpi,ipadx=5*dpi,side="top",anchor="nw")
+            delay_rollcall_time=tk.IntVar()
             delay_rollcall_time.set(configs_access("delay_rollcall_time_ms"))
-            delay_rollcall_time_entry=tk.Spinbox(window,from_=1,to=2**64,textvariable=delay_rollcall_time)
-            delay_rollcall_time_entry.pack()
-            values={"per_value":None,"new_value":None}
-            def check_delay_rollcall(type_value=True,event=None):
-                nonlocal values
-                if type_value:
-                    values["per_value"]=delay_rollcall_time_entry.get()
-                    window.after(1,lambda:values.update({"new_value":delay_rollcall_time.get()}))
-                def check_delay_rollcall_value():
-                    if not str(values["new_value"]).isdigit():
-                        values["new_value"]=values["per_value"]
-                        delay_rollcall_time_entry.delete(0,"end")
-                        delay_rollcall_time_entry.insert("end",values["per_value"])
-                        delay_rollcall_time_entry.selection("range",0,"end")
-                window.after(2,check_delay_rollcall_value)
-            delay_rollcall_time_entry.bind("<Key>",check_delay_rollcall)
+            delay_rollcall_time_frame=tk.Frame(window)
+            delay_rollcall_time_frame.pack(side="top",anchor="center",pady=15*dpi)
+            delay_rollcall_time_entry=tkex.tkex.Num_Spinbox(delay_rollcall_time_frame,from_=0,to=2**64-1,textvariable=delay_rollcall_time,bg="#D3FEFF",font=("楷体",20),buttonbackground="#D3E6F5",width=6)
+            print(type(delay_rollcall_time_entry.master).__name__)
+            delay_rollcall_time_entry.grid(row=0,column=0,sticky="ns")
+            delay_rollcall_time_unit_label=tk.Label(delay_rollcall_time_frame,text="毫秒",font=("楷体",16),bg="#B6EEFF",fg="#06212B")
+            delay_rollcall_time_unit_label.grid(row=0,column=1,sticky="ns")
+            delay_rollcall_time_entry.focus_set()
+            def apply_delay_rollcall_time():
+                window.event_generate("<<Configs_Change>>",data=("delay_rollcall_time_ms",min(
+                                                        max(0,delay_rollcall_time.get()),
+                                                        2**64-1
+                                                        )))
+            delay_rollcall_time_button=ttk.Button(window,text="确定",command=apply_delay_rollcall_time)
+            delay_rollcall_time_button.config(style=ttk_style(delay_rollcall_time_button,background="#B6EEFF"))
+            delay_rollcall_time_button.pack(side="right",anchor="s",padx=10*dpi,pady=10*dpi)
             return(window)
         if exist==None:
             delay_rollcall_set_window=create()
@@ -649,15 +629,6 @@ def delay_rollcall_set(exist=None):
             delay_rollcall_set_window=create()
         else:
             raise
-def running_time_compute(start_time,end_time):
-    running_time=(end_time-start_time)*1000
-    if running_time<=1:
-        if running_time*10<1:
-            return(1)
-        else:
-            return(int(running_time*10+10))
-    else:
-        return(int(running_time+20))
 edit_config_window=None
 def edit_config(exist=None):
     global edit_config_window
@@ -668,7 +639,6 @@ def edit_config(exist=None):
             window.title("编辑名单文件")
             window.minsize(int(500*dpi),int(410*dpi))
             window.config(bg="#b3c2ff")
-            window.iconbitmap(bitmap=cwd_path)
             window.attributes("-alpha",0.95)
             window.resizable(False,False)
             window.transient(main)
@@ -724,7 +694,6 @@ def edit_config(exist=None):
             is_enabme_weight.place(x=20*dpi,y=160*dpi)
             def check_changed():
                 if not name_database == name_db_temp:
-                    Process_Local_Message("FILE_NOT_SAVED", "namelist", "boardcast")
                     Process_Local_Message("NAMELIST_CHANGED", "namelist", "boardcast")
                 window.after(50,check_changed)
             window.after(50,check_changed)
@@ -733,17 +702,9 @@ def edit_config(exist=None):
                 Process_Local_Message("NAMELIST_CHANGED", "namelist", "remove")
                 window.destroy()
             window.protocol("WM_DELETE_WINDOW",edit_config_exit)
-            def add_namelist():
-                def sub(name_index=0):
-                    if name_index<len(name_db_temp):
-                        name_list.insert("end",str(name_db_temp[name_index]))
-                        name_list.after(8,sub,name_index+1)
-                sub()
-            #test=thd.Thread(target=add_namelist)
-            name_list.after(running_time_compute(start_create_time,time.perf_counter())+10,add_namelist)
-            #name_list.after(running_time_compute(start_create_time,time.perf_counter())+10,lambda:name_list.insert(0,*name_database))
+            name_list.insert("end",*name_db_temp)
             del start_create_time
-            search_result=[]
+            search_result=list(name_db_temp)
             def check_name_database_none():
                 if name_database==[]:
                     start.config(state="disable")
@@ -757,6 +718,7 @@ def edit_config(exist=None):
                             global rollcall_once_namelist
                             if len(name_db_temp) <= 1:
                                 rollcall_once.set(False)
+                                window.event_generate("<<Configs_Change>>",data=("is_rollcall_once",False))
                             name_database.clear()
                             for names in name_db_temp:
                                 name_database.append(names)
@@ -767,17 +729,17 @@ def edit_config(exist=None):
                             success_saved=1
                             if is_save==1:
                                 if os.path.isdir("./namelist.json")==True:
-                                    msg.showerror("编辑配置文件","配置文件\"namelist.json\"为目录，请在保存之前删除此目录。",parent=window)
+                                    pre_window_error_show("配置文件\"namelist.json\"为目录，请在保存之前删除此目录。","编辑配置文件",0x10,parent=window)
                                     success_saved=0
                                 else:
                                     try:
                                         with open("./namelist.json","w",encoding="utf-8") as save_list_file:
                                             save_list_file.write(json.dumps(name_db_temp,ensure_ascii=False))
                                     except PermissionError as e:
-                                        msg.showerror("编辑配置文件",f"配置文件\"namelist.json\"被拒绝访问，原因：\n{e}",parent=window)
+                                        pre_window_error_show(f"配置文件\"namelist.json\"被拒绝访问，原因：\n{e}","编辑配置文件",0x10,parent=window)
                                         success_saved=0
                                     except Exception as e:
-                                        msg.showerror("编辑配置文件",f"未知错误：\n{str(tb.format_exc())}",parent=window)
+                                        pre_window_error_show(f"未知错误：\n{str(tb.format_exc())}","编辑配置文件",0x10,parent=window)
                                         success_saved=0
                                 if success_saved==1:
                                     save_list.config(state="disable")
@@ -785,19 +747,14 @@ def edit_config(exist=None):
                                     Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "remove")
                                     Process_Local_Message("NAMELIST_CHANGED", "namelist", "remove")
                             else:
-                                #save_list_apply.config(state="disable")
                                 Process_Local_Message("NAMELIST_CHANGED", "namelist", "remove")
-                                if not Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "exist"):
-                                    Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "boardcast")
+                                Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "boardcast")
                             check_name_database_none()
                             save_list_command(0)
                         if is_direct == True:
                             save_list_sub()
-                        elif save_list_check_rollcall_once.MessageBox_return == 6:
-                            save_list_sub()
                     if rollcall_once.get():
-                        save_list_check_rollcall_once=Win32_MessageboxW_Base(
-                            window,
+                        pre_window_error_show(
                             """    在打开不重复抽取后，您所抽剩余的名单将替换成所编辑的名单。
     如果名单元素少于4个，不重复抽取将不会达到预期效果。
     如果少于两个元素，程序会自动关闭不重复抽选。
@@ -805,16 +762,18 @@ def edit_config(exist=None):
 是否继续？""",
                             "随机抽取-保存",
                             0x34,
-                            save_list_1
+                            parent=window,
+                            action={"6":lambda:save_list_1(is_direct=True)}
                             )
                     else:
                         save_list_1(is_direct=True)
                 if done==0:
-                    if Process_Local_Message("FILE_NOT_SAVED", "namelist", "exist"):
+                    if Process_Local_Message("NAMELIST_CHANGED", "namelist", "exist"):
+                        save_list_apply.config(state="normal",command=lambda:save_list_choice(0))
                         save_list.config(state="normal",command=lambda:save_list_choice(1))
-                        if (not Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "exist")) or (Process_Local_Message("NAMELIST_CHANGED", "namelist", "exist")):
-                            save_list_apply.config(state="normal",command=lambda:save_list_choice(0))
-                        save_list_command(1)
+                    elif (Process_Local_Message("TEMPLY_SAVED_RAM", "namelist", "exist") or Process_Local_Message("FILE_NOT_SAVED", "namelist", "exist")):
+                        save_list.config(state="normal",command=lambda:save_list_choice(1))
+                    save_list_command(1)
                 else:
                     pass
                 if done==0:
@@ -869,6 +828,7 @@ def edit_config(exist=None):
             entry_type()
             def search_selection_conv():
                 if not name_list.curselection()==():
+                    print(search_result)
                     return([name_db_temp.index(search_result[name_list.curselection()[0]]),search_result[name_list.curselection()[0]] in name_db_temp])
                 else:
                     return([None,False])
@@ -888,6 +848,7 @@ def edit_config(exist=None):
                     name_list.insert("end",*search_result)
                     if selected_name_before in search_result:
                         name_list.selection_set(search_result.index(selected_name_before))
+                        name_list.see(search_result.index(selected_name_before))
                     else:
                         entry_type(selected=0)
                 window.after(10,searching)
@@ -896,45 +857,9 @@ def edit_config(exist=None):
                 nonlocal primary_word
                 nonlocal search_result
                 if not primary_word==search_entry.get():
-                    if (search_entry.get()=="") and (entered==1):
-                        def restore_namelist():
-                            name_list.delete(0,"end")
-                            start_insert_time=time.perf_counter()
-                            name_list.insert(0,*name_db_temp)
-                            return(running_time_compute(start_insert_time,time.perf_counter()))
-                        if search_selection_conv()[1]:
-                            restore=search_selection_conv()[0]
-                            after_insert_time=restore_namelist()
-                            def temp_func():
-                                nonlocal temp_func
-                                name_list.selection_set(restore)
-                                entry_type(selected=1,name=name_list.selection_get())
-                                name_list.see(restore)
-                                del temp_func
-                            name_list.after(after_insert_time,lambda:temp_func())
-                        else:
-                            restore_namelist()
-                        entered=0
-                    else:
-                        primary_word=search_entry.get()
-                        if not name_list.curselection()==():
-                            if (search_result==[]) and (entered==0):
-                                search_result=list(name_db_temp)
-                            primary_search_selected=search_result[name_list.curselection()[0]]
-                            def search_relist_out():
-                                start_search_list_time=time.perf_counter()
-                                search_in_namedatabase(search_entry.get())
-                                return(running_time_compute(start_search_list_time,time.perf_counter()))
-                            if primary_search_selected in search_result:
-                                a=search_relist_out()
-                                if primary_search_selected in search_result:
-                                    name_list.after(a,lambda:name_list.selection_set(search_result.index(primary_search_selected)))
-                            else:
-                                search_relist_out()
-                        else:
-                            search_in_namedatabase(search_entry.get())
-                        entered=1
-                window.after(2,search_namelist,entered)
+                    primary_word=search_entry.get()
+                    search_in_namedatabase(search_entry.get())
+                window.after(5,search_namelist,entered)
             search_namelist()
             def cancel_selection(event=None):
                 name_list.selection_clear(0,"end")
@@ -942,7 +867,7 @@ def edit_config(exist=None):
             selected_name.bind("<Button-1>",cancel_selection)
             def add_t(selected,name_index=None):
                 if selected_entry.get() in name_db_temp:
-                    msg.showerror("编辑配置文件",f"\"{selected_entry.get()}\"已在列表中存在。",parent=window)
+                    pre_window_error_show(f"\"{selected_entry.get()}\"已在列表中存在。","编辑配置文件",0x10,parent=window)
                 else:
                     if selected==1:
                         if search_result==[]:
@@ -974,25 +899,23 @@ def edit_config(exist=None):
                         return False
                     else:
                         return True
-                if name_list.get(name_list.size()-1)==name_list.get(name_index):
-                    name_list.delete(name_list.size()-1)
-                    name_list.selection_set(name_list.size()-1)
-                    name_list.see(name_list.size()-1)
-                    del name_db_temp[-1]
-                    if state_add_del_opinion():
-                        entry_type(selected=1,name=name_db_temp[-1])
-                    else:
-                        entry_type(selected=0)
+                _selected_name=name_list.get(name_index)
+                name_list.delete(name_index)
+                if _selected_name in search_result:
+                    search_result.remove(_selected_name)
+                name_db_temp.pop(name_db_temp.index(_selected_name))
+                if name_index==name_list.size():
+                    _selected_name=name_list.get(name_list.size()-1)
+                    name_index-=1
                 else:
-                    name_list.delete(name_index)
-                    name_list.selection_set(name_index)
-                    name_list.see(name_index)
-                    name_db_temp.pop(name_index)
-                    entry_type(selected=1,name=name_db_temp[name_index])
+                    _selected_name=name_list.get(name_index)
+                name_list.selection_set(name_index)
+                name_list.see(name_index)
+                entry_type(selected=1,name=_selected_name)
              ##推到重做吧（已完善一些输入机制）
             def replace_name(name_index=None):
                 if selected_entry.get() in name_db_temp:
-                    msg.showerror("编辑配置文件",f"\"{selected_entry.get()}\"已在列表中存在。",parent=window)
+                    pre_window_error_show(f"\"{selected_entry.get()}\"已在列表中存在。","编辑配置文件",0x10,parent=window)
                 else:
                     if search_result==[]:
                         name_db_temp[name_list.curselection()[0]]=selected_entry.get()
@@ -1006,6 +929,7 @@ def edit_config(exist=None):
                     entry_type(selected=1,name=name_db_temp[name_list.curselection()[0]])
                     replace_list.config(state="disable")
             def clean_name_list():
+                nonlocal name_db_temp
                 name_db_temp.clear()
                 name_list.delete(0,"end")
                 entry_type()
@@ -1128,27 +1052,25 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                 if not len(name_database)==len(list(set(name_database))):
                     Process_Local_Message("FILE_NOT_SAVED","namelist","boardcast")
                     def MessageBox_Return():
-                        global name_database
+                        global name_database,LOCAL_MESSAGE
                         #nonlocal view_redundant_window
                         #if is_view_redundant_teams.MessageBox_return==6:
                         def create_window(exist=None):
                             global view_redundant_window
                             Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","remove")
                             try:
-                                test_team=[]
-                                def create(recall=False):
+                                def create():
                                     global view_redundant_window
-                                    wait_nobreak=True
+                                    after_time_cancel=[None,None]
                                     def end_view_redundant():
-                                        nonlocal wait_nobreak
-                                        view_redundant_window[2]=False
-                                        wait_nobreak=False
-                                        #Process_Local_Message("WM_QUIT",view_redundant_teams,"boardcast")
+                                        Process_Local_Message("WM_QUIT","Redundant_Window","boardcast")
+                                        Process_Local_Message("WM_CREATE","Start_Redundant_Window_Main",action="remove")
+                                        main.after_cancel(after_time_cancel[0])
+                                        main.after_cancel(after_time_cancel[1])
                                         view_redundant_window[0].destroy()
                                     view_redundant_teams=tk.Toplevel(main,bg="#000000")
                                     view_redundant_teams.minsize(int(400*dpi),int(300*dpi))
                                     view_redundant_teams.title("随机抽取-名单重复元素查看")
-                                    view_redundant_teams.iconbitmap(bitmap=cwd_path)
                                     ttk.Style().configure("Treeview",rowheight=int(20*dpi))
                                     buttons_below=tk.Frame(
                                         view_redundant_teams,
@@ -1158,79 +1080,72 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                                     button_ok=ttk.Button(buttons_below,text="确定",command=end_view_redundant)
                                     button_ok.pack(side="right",anchor="center",padx=10*dpi,pady=3*dpi)
                                     view_redundant_teams_columns=["重复的名称","出现次数"]
+                                    redundant_teams_table_scroll=tk.Scrollbar(view_redundant_teams)
+                                    redundant_teams_table_scroll.pack(side="right",fill="y")
                                     redundant_teams_table=ttk.Treeview(
                                         view_redundant_teams,
                                         columns=view_redundant_teams_columns,
                                         show="headings",
-                                        style="Treeview"
+                                        style="Treeview",
+                                       yscrollcommand=redundant_teams_table_scroll.set
                                         )
                                     redundant_teams_table.pack(side="left",expand=True,fill="both")
                                     for i in view_redundant_teams_columns:
                                         redundant_teams_table.heading(i,text=i)
-                                    view_redundant_window=[view_redundant_teams,redundant_teams_table,True,recall,False]
+                                    view_redundant_window=[view_redundant_teams]
                                     view_redundant_teams.protocol("WM_DELETE_WINDOW",end_view_redundant)
                                     def view_redundant(lists):
-                                        def start():
-                                            for name in list(dict.fromkeys(lists)):
-                                                if Process_Local_Message("WM_QUIT","GLOBAL","exist"):
-                                                    break
-                                                if ((view_redundant_window!=[]) and (view_redundant_window[2]==False)):
-                                                    if view_redundant_window[3]==True:
-                                                        TreeView_Redudant_list=redundant_teams_table.get_children()
-                                                        redundant_teams_table.delete(*TreeView_Redudant_list)
-                                                    view_redundant_window[2]=True
-                                                    break
-                                                if not lists.count(name)==1:
-                                                    test_team.append([name,lists.count(name)])
-                                                    redundant_teams_table.insert("","end",values=[name,str(lists.count(name))])
-                                                time.sleep(0.02)
-                                            view_redundant_window[4]=True
-                                            if view_redundant_window[3]==True:
-                                                view_redundant_window[3]=False
-                                            else:
-                                                view_redundant_window[2]=False
-                                        if view_redundant_window[3]==False:
-                                            start()
-                                        while (wait_nobreak==True) and (Process_Local_Message("WM_QUIT","GLOBAL","exist")==False):
-                                            if (view_redundant_window[2]==True) and (view_redundant_window[4]==True):
-                                                view_redundant_window[3]=False
-                                                TreeView_Redudant_list=redundant_teams_table.get_children()
-                                                redundant_teams_table.delete(*TreeView_Redudant_list)
-                                                start()
-                                            else:
-                                                time.sleep(0.4)
+                                        nonlocal after_time_cancel
+                                        def insert_redundant_teams(count=0):
+                                            if count<=len(ori_list)-1:
+                                                name=ori_list[count]
+                                                print(name,lists.count(name))
+                                                if not Process_Local_Message("WM_RESTORE","Window_Already_Opened",action="exist"):
+                                                    if not lists.count(name)==1:
+                                                        redundant_teams_table.insert("","end",values=[name,str(lists.count(name))])
+                                                    if (not Process_Local_Message("WM_QUIT","GLOBAL","exist")) and (not Process_Local_Message("WM_QUIT","Redundant_Window","exist")):
+                                                        after_time_cancel[0]=main.after(20,insert_redundant_teams,count+1)
+                                        if Process_Local_Message("WM_RESTORE","Window_Already_Opened",action="exist"):
+                                            ori_list=list(dict.fromkeys(lists))
+                                            TreeView_Redudant_list=redundant_teams_table.get_children()
+                                            redundant_teams_table.delete(*TreeView_Redudant_list)
+                                            Process_Local_Message("WM_RESTORE","Window_Already_Opened",action="remove")
+                                            insert_redundant_teams()
                                         else:
-                                            Process_Local_Message("WM_QUIT","GLOBAL","remove")
-                                        del lists
-                                    #test_team=[["温迪","62"],["胡桃","69"],["安伯","81"],["刻晴","112"],["琴","31"],["芙宁娜","101"],["夏洛蒂","41"],["香菱","11"],["凯亚","16"],["丽莎","30"],["纳西妲","102"],["夜兰","20"],["这里还没做好，所以这个算是一个临时彩蛋吧，呵呵。后续会改一下。","616"]]
+                                            if not Process_Local_Message("WM_CREATE","Start_Redundant_Window_Main",action="exist"):
+                                                ori_list=list(dict.fromkeys(lists))
+                                                insert_redundant_teams()
+                                                Process_Local_Message("WM_CREATE","Start_Redundant_Window_Main",action="boardcast")
+                                            else:
+                                                pass
+                                        if (not Process_Local_Message("WM_QUIT","GLOBAL","exist")) and (not Process_Local_Message("WM_QUIT","Redundant_Window","exist")):
+                                            after_time_cancel[1]=main.after(400,view_redundant,lists)
                                     view_redundant(name_database1)
                                 if exist==None:
                                     create()
                                 else:
                                     view_redundant_window[0].deiconify()
-                                    if view_redundant_window[2]==False:
-                                        view_redundant_window[2]=True
-                                    else:
-                                        view_redundant_window[2]=False
-                                    view_redundant_window[3]=True
-                                if "recall" in locals():
-                                    view_redundant_window[3]=recall
-                                #view_redundant(name_database1)
+                                    Process_Local_Message("WM_RESTORE","Window_Already_Opened",action="boardcast")
 ##新功能，因某些原因，暂时弃用
                             except tk.TclError as e:
                                 if str(e)==f"bad window path name \"{view_redundant_window[0]}\"":
+                                    Process_Local_Message("WM_RESTORE","Window_Already_Opened",action="remove")
                                     create()
                                 else:
                                     raise
                         if not view_redundant_window==[]:
+                            Process_Local_Message("WM_QUIT","Redundant_Window","remove")
                             create_window(exist=view_redundant_window[0])
                         else:
+                            Process_Local_Message("WM_QUIT","Redundant_Window","remove")
                             create_window()
+                    main.bind("<<Redundant_Window>>",lambda event:MessageBox_Return())
                     pre_window_error_show("""检测到配置文件中的元素重复，程序已自动应用去重的名单，名单不会保存到配置文件中。
 是否立即查看重复的元素的情况？""",
                             "随机抽取-配置文件的元素重复",
                             0x34,
-                            action={"6":[MessageBox_Return,()]}
+                            action={"6":lambda:main.event_generate("<<Redundant_Window>>")},
+                            parent=main
                             )
                     name_database1=list(name_database)
                     name_database=list(dict.fromkeys(name_database))
@@ -1238,38 +1153,16 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                     rollcall_once_namelist=list(name_database)
                 del names
             if name_database==[]:#检查是否为空列表
-                c.windll.user32.MessageBoxW(main.winfo_id(),"json配置为空，请在当前目录下的\"namelist.json\"中写入一个列表。","随机抽取-json配置为空",0x10)#弹窗报错
-                #MessageBoxW(Owner,Text,Title,Style)
-                #Owner-窗口所有者，仅弹窗用None，相当于c语言的Null。如果设置了窗口的id，则被设置的窗口将无法操作，并且会发出默认响声。当前Tkinter窗口的id可用上面代码获取
-                #Text-弹窗文本，如果用英文双引号或者会破坏字符串结构的字符要在其前面加上转义符"\"，多行文本可用三引号字符串或者单引号时在要换行的部分加上"\n"，有变量在字符串里的要在字符串代码前面加上f
-                #Title-弹窗标题，文本结构与上面一样
-                #Style-弹出样式，为16进制数值（例如0x10）。在"x"后面的数字中，最后一个数为弹窗按钮组合方式，其余的为弹窗的类型，例如前面的数字1代表是错误窗口，后面的数字0为只有确定按钮。不同组合其带来的返回值可能不同，请用print来观察并用if 语句做判断。
-                #具体使用方式请自行在网上搜索MessageBoxW函数，其排列方式与上面一样。
-                #这个只能在Windows上使用，不能在其它系统使用。请注意看"c.windll"，这个是调用windows的dll的，MessageBoxW是win32函数。
-
-                
-                #多行文本 三引号："""Text1
-                #                    Text2
-                #                    Text3"""
-                #换行符："Text1\nText2\nText3"
-                #字符串代码前面的f：
-                #   f"""text1 {变量}
-                #       text2
-                #       text3 {"字符串"}"""
-                #   f"text1 {变量}\ntext2\ntext3 {"字符串"}"
-                #外面的引号必须全为英语双引号或单引号
-                #三引号字符串有时还可以当注释，只不过兼容性差一点
-
-                
+                pre_window_error_show("json配置为空，请在当前目录下的\"namelist.json\"中写入一个列表。","随机抽取-json配置为空",0x10,parent=main)#弹窗报错                
                 start.config(state="disable")#禁用开始按钮
             else:
                 is_error_empty=1#设置为非空列表
                 start.config(state="normal")
         else:
             if os.path.isdir("./namelist.json")==True:#检测配置是否为文件夹
-                pre_window_error_show("json名单为目录，请在当前目录下的\"namelist.json\"文件夹删除，然后再创建此文件","随机抽取-找不到json名单",0x10)
+                pre_window_error_show("json名单为目录，请在当前目录下的\"namelist.json\"文件夹删除，然后再创建此文件","随机抽取-找不到json名单",0x10,parent=main)
             else:
-                pre_window_error_show("未找到json名单，请在当前目录下新建\"namelist.json\"文件","随机抽取-找不到json名单",0x10)
+                pre_window_error_show("未找到json名单，请在当前目录下新建\"namelist.json\"文件","随机抽取-找不到json名单",0x10,parent=main)
             if is_error_empty==0:
                 start.config(state="disable")
     except Exception:
@@ -1278,14 +1171,14 @@ def json_config(encoding=None,event=None):#encoding默认值为空
         #except ValueError as json_error:#检查json语法是否正确（Python3.4兼容）
         #    pre_window_error_show("json语法不正确，原因：\n"+str(json_error),"随机抽取-json名单格式错误",0x10)
         except json.decoder.JSONDecodeError as json_error:#检查json语法是否正确
-            pre_window_error_show("json语法不正确，原因：\n"+str(json_error),"随机抽取-json名单格式错误",0x10)
+            pre_window_error_show("json语法不正确，原因：\n"+str(json_error),"随机抽取-json名单格式错误",0x10,parent=main)
         except FileNotFoundError as json_error:#检查文件存在性（基本被上面的if-else代码优先执行）
-            pre_window_error_show(main.winfo_id(),"找不到json文件，原因：\n"+str(json_error),"随机抽取-找不到json名单",0x10)
+            pre_window_error_show(main.winfo_id(),"找不到json文件，原因：\n"+str(json_error),"随机抽取-找不到json名单",0x10,parent=main)
         except PermissionError as json_error:#检查是否被拒绝访问
-            pre_window_error_show("json文件被拒绝读取，原因：\n"+str(json_error),"随机抽取-json名单读取失败",0x10)
+            pre_window_error_show("json文件被拒绝读取，原因：\n"+str(json_error),"随机抽取-json名单读取失败",0x10,parent=main)
         except UnicodeDecodeError:
             if not encoding==None:
-                pre_window_error_show("名单文件的文本编码错误，原因：\n"+str(tb.format_exc()),"随机抽取-名单文本编码错误",0x10)
+                pre_window_error_show("名单文件的文本编码错误，原因：\n"+str(tb.format_exc()),"随机抽取-名单文本编码错误",0x10,parent=main)
             else:
                 encodes=["ansi","utf-16","utf-16-bom","utf-32","unicode_escape"]
                 for encodings in encodes:
@@ -1297,13 +1190,13 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                             try:
                                 raise
                             except UnicodeDecodeError as e:
-                                pre_window_error_show("无法识别名单所保存的文本编码，这可能是非纯文本文件，或者纯文本文件本身已经乱码。","随机抽取-无法识别的名单文本编码",0x10)
+                                pre_window_error_show("无法识别名单所保存的文本编码，这可能是非纯文本文件，或者纯文本文件本身已经乱码。","随机抽取-无法识别的名单文本编码",0x10,parent=main)
                             except Exception as e:
-                                pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10)
+                                pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10,parent=main)
                         else:
                             print(i)
         except Exception as json_error:#检测其它异常来输出详细信息
-            pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10)
+            pre_window_error_show("未知错误：\n"+str(tb.format_exc()),"随机抽取-错误",0x10,parent=main)
         if is_error_empty==0:#检查是否为异常配置文件
             start.config(state="disable")
     try:
@@ -1313,28 +1206,27 @@ def json_config(encoding=None,event=None):#encoding默认值为空
         pass
     if (len(name_database)<2) and (rollcall_once.get()):
         rollcall_once.set(False)
-        configs_access("is_rollcall_once",value=False,action="change")
-        pre_window_error_show("json名单元素少于2个，已自动禁用不重复抽取。","随机抽取-json名单检测",0x30)
-    if not pre_window_errors == {}:
-        show_error=thd.Thread(target=show_pre_window_error)
-        show_error.start()
+        main.event_generate("<<Configs_Change>>",data=("is_rollcall_once",False))
+        #configs_access("is_rollcall_once",value=False,action="change")
+        pre_window_error_show("json名单元素少于2个，已自动禁用不重复抽取。","随机抽取-json名单检测",0x30,parent=main)
 #延迟执行json_config的代码，主要是为了防止在加载界面时提前弹出错误窗口
 try:
-    main.iconbitmap(bitmap=cwd_path)
+    main.iconbitmap(default=cwd_path)
 except tk.TclError as icon_error:
     if ("bitmap \"" and "\" not defined") in str(icon_error):
-        main.after(running_time_compute(main_window_time,main_window_finish_time),lambda:main.iconbitmap(bitmap=cwd_path))
+        main.after_idle(lambda:main.iconbitmap(default=cwd_path))
     else:
         raise
 #test=thd.Thread(target=json_config)
 #test.start()
-main.after(int(running_time_compute(main_window_time,main_window_finish_time)*4/3+1),json_config)
+main.after_idle(json_config)
 def event_case():
     window_size_main=(main.winfo_width(),main.winfo_height())
     def is_window_size_changed():
         nonlocal window_size_main
         if (window_size_main[0]!=main.winfo_width()) or (window_size_main[1]!=main.winfo_height()):
             main.event_generate("<<SizeChanged>>")
+            print("Configure")
         window_size_main=(main.winfo_width(),main.winfo_height())
     main.after(5,is_window_size_changed)
     main.after(5,event_case)
@@ -1358,5 +1250,7 @@ def key_event():
     for hotkey in ken_events:
         main.bind(*hotkey)
 key_event()
+show_error=thd.Thread(target=show_pre_window_error)
+show_error.start()
 #防止主窗口消失
 main.mainloop()
